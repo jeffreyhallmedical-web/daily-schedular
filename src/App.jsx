@@ -455,8 +455,7 @@ export default function DailyPracticePlannerPreview() {
             <div className="flex items-center gap-2 text-xl font-semibold tracking-tight">
               <CalendarDays className="h-6 w-6" />
               Daily Practice Planner
-              <span className="border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">REST no-password v0.3.5</span>
-            </div>
+                        </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
               <button
