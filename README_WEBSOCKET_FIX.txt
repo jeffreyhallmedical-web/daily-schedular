@@ -1,0 +1,1 @@
+Fixes Supabase on Netlify Node 20 by adding the ws package and passing it as the Realtime transport in netlify/functions/planner.mjs. Upload/commit this source to GitHub, then redeploy with clear cache.
