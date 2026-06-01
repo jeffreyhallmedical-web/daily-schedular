@@ -302,7 +302,7 @@ async function updateSettings(body) {
 export const handler = async (event) => {
   try {
     if (!isAuthorized(event)) {
-      return json(401, { ok: false, error: "Unauthorized. Check the app password." });
+      return json(401, { ok: false, error: "Unauthorized." });
     }
 
     if (event.httpMethod === "GET") {
