@@ -1,5 +1,3 @@
-import { createClient } from "@supabase/supabase-js";
-
 const VALID_OPTIONS = new Set(["", "SHIMO", "NASU", "WFH", "OFF", "B_TRIP", "HOLIDAY", "KAWASAKI"]);
 
 function json(statusCode, body) {
@@ -16,13 +14,57 @@ function json(statusCode, body) {
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) throw new Error(`Missing environment variable: ${name}`);
-  return value;
+  return value.trim();
 }
 
-function getSupabase() {
-  return createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
-    auth: { persistSession: false, autoRefreshToken: false },
+function supabaseBaseUrl() {
+  const url = requireEnv("SUPABASE_URL").replace(/\/$/, "");
+  if (!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(url)) {
+    throw new Error("SUPABASE_URL must be your Supabase Project URL, for example https://xxxx.supabase.co");
+  }
+  return url;
+}
+
+function authHeaders(extra = {}) {
+  const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+  return {
+    apikey: key,
+    authorization: `Bearer ${key}`,
+    "content-type": "application/json",
+    ...extra,
+  };
+}
+
+async function rest(path, options = {}) {
+  const response = await fetch(`${supabaseBaseUrl()}/rest/v1/${path}`, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
   });
+
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+
+  if (!response.ok) {
+    const message = data?.message || data?.error || (typeof data === "string" ? data : response.statusText);
+    throw new Error(`Supabase REST ${response.status}: ${message}`);
+  }
+
+  return { data, response };
+}
+
+function qs(params) {
+  const q = new URLSearchParams();
+  for (const [key, value] of params) {
+    q.append(key, value);
+  }
+  return q.toString();
 }
 
 function isAuthorized(event) {
@@ -83,7 +125,6 @@ function normalizeOption(value) {
 }
 
 async function loadPlanner(event) {
-  const supabase = getSupabase();
   const params = event.queryStringParameters || {};
   const start = normalizeDate(params.start || new Date().toISOString().slice(0, 10));
   const days = Math.min(Math.max(Number(params.days || 20), 1), 90);
@@ -91,28 +132,29 @@ async function loadPlanner(event) {
   endDate.setUTCDate(endDate.getUTCDate() + days);
   const end = endDate.toISOString().slice(0, 10);
 
-  const [peopleResult, entriesResult, settingsResult] = await Promise.all([
-    supabase
-      .from("people")
-      .select("id, surname, given_name, active, created_at, updated_at")
-      .eq("active", true)
-      .order("surname", { ascending: true })
-      .order("given_name", { ascending: true }),
-    supabase
-      .from("schedule_entries")
-      .select("person_id, schedule_date, am_location, pm_location, pm_manually_changed, start_time, end_time")
-      .gte("schedule_date", start)
-      .lt("schedule_date", end)
-      .order("schedule_date", { ascending: true }),
-    supabase
-      .from("app_settings")
-      .select("value")
-      .eq("key", "planner")
-      .maybeSingle(),
+  const peopleQuery = qs([
+    ["select", "id,surname,given_name,active,created_at,updated_at"],
+    ["active", "eq.true"],
+    ["order", "surname.asc,given_name.asc"],
   ]);
 
-  const firstError = peopleResult.error || entriesResult.error || settingsResult.error;
-  if (firstError) throw new Error(firstError.message);
+  const entriesQuery = qs([
+    ["select", "person_id,schedule_date,am_location,pm_location,pm_manually_changed,start_time,end_time"],
+    ["schedule_date", `gte.${start}`],
+    ["schedule_date", `lt.${end}`],
+    ["order", "schedule_date.asc"],
+  ]);
+
+  const settingsQuery = qs([
+    ["select", "value"],
+    ["key", "eq.planner"],
+  ]);
+
+  const [peopleResult, entriesResult, settingsResult] = await Promise.all([
+    rest(`people?${peopleQuery}`),
+    rest(`schedule_entries?${entriesQuery}`),
+    rest(`app_settings?${settingsQuery}`),
+  ]);
 
   const people = (peopleResult.data || []).map((person) => ({
     id: person.id,
@@ -133,7 +175,7 @@ async function loadPlanner(event) {
     endTime: String(entry.end_time || "17:00").slice(0, 5),
   }));
 
-  const settings = settingsResult.data?.value || { summer_time_enabled: false };
+  const settings = settingsResult.data?.[0]?.value || { summer_time_enabled: false };
 
   return json(200, {
     ok: true,
@@ -144,7 +186,6 @@ async function loadPlanner(event) {
 }
 
 async function addPerson(body) {
-  const supabase = getSupabase();
   const surname = String(body.surname || "").trim();
   const givenName = String(body.givenName || "").trim();
 
@@ -152,53 +193,52 @@ async function addPerson(body) {
     return json(400, { ok: false, error: "Surname and given name are required." });
   }
 
-  const { count, error: countError } = await supabase
-    .from("people")
-    .select("id", { count: "exact", head: true })
-    .eq("active", true);
-
-  if (countError) throw new Error(countError.message);
-  if ((count || 0) >= 50) {
+  const activePeopleQuery = qs([
+    ["select", "id"],
+    ["active", "eq.true"],
+  ]);
+  const activePeople = await rest(`people?${activePeopleQuery}`);
+  if ((activePeople.data || []).length >= 50) {
     return json(400, { ok: false, error: "Maximum of 50 active people reached." });
   }
 
-  const { data, error } = await supabase
-    .from("people")
-    .insert({ surname, given_name: givenName })
-    .select("id, surname, given_name, active, created_at, updated_at")
-    .single();
+  const insertQuery = qs([["select", "id,surname,given_name,active,created_at,updated_at"]]);
+  const { data } = await rest(`people?${insertQuery}`, {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ surname, given_name: givenName }),
+  });
 
-  if (error) throw new Error(error.message);
+  const person = Array.isArray(data) ? data[0] : data;
 
   return json(200, {
     ok: true,
     person: {
-      id: data.id,
-      surname: data.surname,
-      givenName: data.given_name,
-      active: data.active,
-      created_at: data.created_at,
-      updated_at: data.updated_at,
+      id: person.id,
+      surname: person.surname,
+      givenName: person.given_name,
+      active: person.active,
+      created_at: person.created_at,
+      updated_at: person.updated_at,
     },
   });
 }
 
 async function deletePerson(body) {
-  const supabase = getSupabase();
   const personId = String(body.personId || "");
   if (!personId) return json(400, { ok: false, error: "personId is required." });
 
-  const { error } = await supabase
-    .from("people")
-    .update({ active: false, updated_at: new Date().toISOString() })
-    .eq("id", personId);
+  const query = qs([["id", `eq.${personId}`]]);
+  await rest(`people?${query}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ active: false, updated_at: new Date().toISOString() }),
+  });
 
-  if (error) throw new Error(error.message);
   return json(200, { ok: true });
 }
 
 async function updateEntry(body) {
-  const supabase = getSupabase();
   const personId = String(body.personId || "");
   const scheduleDate = normalizeDate(body.date);
   const am = normalizeOption(body.am) || null;
@@ -209,56 +249,56 @@ async function updateEntry(body) {
 
   if (!personId) return json(400, { ok: false, error: "personId is required." });
 
-  const { data, error } = await supabase
-    .from("schedule_entries")
-    .upsert(
-      {
-        person_id: personId,
-        schedule_date: scheduleDate,
-        am_location: am,
-        pm_location: pm,
-        pm_manually_changed: pmManual,
-        start_time: startTime,
-        end_time: endTime,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "person_id,schedule_date" }
-    )
-    .select("person_id, schedule_date, am_location, pm_location, pm_manually_changed, start_time, end_time")
-    .single();
+  const query = qs([
+    ["on_conflict", "person_id,schedule_date"],
+    ["select", "person_id,schedule_date,am_location,pm_location,pm_manually_changed,start_time,end_time"],
+  ]);
 
-  if (error) throw new Error(error.message);
+  const { data } = await rest(`schedule_entries?${query}`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({
+      person_id: personId,
+      schedule_date: scheduleDate,
+      am_location: am,
+      pm_location: pm,
+      pm_manually_changed: pmManual,
+      start_time: startTime,
+      end_time: endTime,
+      updated_at: new Date().toISOString(),
+    }),
+  });
+
+  const entry = Array.isArray(data) ? data[0] : data;
 
   return json(200, {
     ok: true,
     entry: {
-      personId: data.person_id,
-      date: data.schedule_date,
-      am: data.am_location || "",
-      pm: data.pm_location || "",
-      pmManual: Boolean(data.pm_manually_changed),
-      startTime: String(data.start_time || "08:30").slice(0, 5),
-      endTime: String(data.end_time || "17:00").slice(0, 5),
+      personId: entry.person_id,
+      date: entry.schedule_date,
+      am: entry.am_location || "",
+      pm: entry.pm_location || "",
+      pmManual: Boolean(entry.pm_manually_changed),
+      startTime: String(entry.start_time || "08:30").slice(0, 5),
+      endTime: String(entry.end_time || "17:00").slice(0, 5),
     },
   });
 }
 
 async function updateSettings(body) {
-  const supabase = getSupabase();
   const summerTime = Boolean(body.summerTime);
 
-  const { error } = await supabase
-    .from("app_settings")
-    .upsert(
-      {
-        key: "planner",
-        value: { summer_time_enabled: summerTime },
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "key" }
-    );
+  const query = qs([["on_conflict", "key"]]);
+  await rest(`app_settings?${query}`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      key: "planner",
+      value: { summer_time_enabled: summerTime },
+      updated_at: new Date().toISOString(),
+    }),
+  });
 
-  if (error) throw new Error(error.message);
   return json(200, { ok: true, settings: { summerTime } });
 }
 
