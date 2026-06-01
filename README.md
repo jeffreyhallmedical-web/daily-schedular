@@ -9,7 +9,7 @@ This version keeps the current UI and replaces Netlify Database with Supabase.
 - Supabase stores the database.
 - The Supabase service role key is used only inside the Netlify Function.
 - The browser never receives the Supabase service role key.
-- A simple `APP_PASSWORD` protects the planner from casual access.
+- No app password gate is enabled in this version. Anyone with the URL can edit the planner.
 
 ## Files that matter
 
@@ -38,7 +38,6 @@ Add these in Netlify site settings:
 ```text
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-APP_PASSWORD=your_private_app_password
 ```
 
 Do not add `SUPABASE_SERVICE_ROLE_KEY` to frontend code and do not prefix it with `VITE_`.
@@ -72,4 +71,4 @@ npm run build
 
 ## Current security level
 
-This is practical app-password protection, not full user authentication. It is suitable for a small private/internal planner. For broader use, add individual user login and roles.
+This no-password version is suitable only for private testing or a URL that is not shared widely. For broader use, add individual user login and roles.

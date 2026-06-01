@@ -68,10 +68,7 @@ function qs(params) {
 }
 
 function isAuthorized(event) {
-  const expected = process.env.APP_PASSWORD;
-  if (!expected) return true;
-  const supplied = event.headers["x-app-password"] || event.headers["X-App-Password"];
-  return supplied === expected;
+  return true;
 }
 
 function parseBody(event) {

@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, Trash2, CalendarDays, RotateCcw, Cloud, CloudOff } from "lucide-react";
 
-const STORAGE_KEY = "daily-practice-planner-v6-supabase-fallback";
-const PASSWORD_KEY = "daily-practice-planner-password";
+const STORAGE_KEY = "daily-practice-planner-v7-supabase-no-password-fallback";
 const API_URL = "/.netlify/functions/planner";
 
 const OPTIONS = [
@@ -213,9 +212,6 @@ export default function DailyPracticePlannerPreview() {
   const [loaded, setLoaded] = useState(false);
   const [cloudStatus, setCloudStatus] = useState("loading");
   const [lastError, setLastError] = useState("");
-  const [password, setPassword] = useState(() => localStorage.getItem(PASSWORD_KEY) || "");
-  const [passwordDraft, setPasswordDraft] = useState("");
-  const [passwordError, setPasswordError] = useState("");
 
   const defaultTimes = useMemo(
     () => (summerTime ? { start: "08:00", end: "16:30" } : { start: "08:30", end: "17:00" }),
@@ -268,7 +264,7 @@ export default function DailyPracticePlannerPreview() {
   }, [people, entries, summerTime, weekStartISO, dayCount, loaded]);
 
   useEffect(() => {
-    if (!loaded || !password || dates.length === 0) return;
+    if (!loaded || dates.length === 0) return;
 
     let cancelled = false;
 
@@ -278,16 +274,10 @@ export default function DailyPracticePlannerPreview() {
 
       try {
         const response = await fetch(`${API_URL}?start=${dates[0].iso}&days=${dayCount + 14}`, {
-          headers: { accept: "application/json", "x-app-password": password },
+          headers: { accept: "application/json" },
         });
         const data = await response.json();
 
-        if (response.status === 401) {
-          localStorage.removeItem(PASSWORD_KEY);
-          setPassword("");
-          setPasswordError("Password was rejected. Enter the correct app password.");
-          throw new Error(data.error || "Unauthorized.");
-        }
 
         if (!response.ok || !data.ok) {
           throw new Error(data.error || "Database load failed.");
@@ -310,22 +300,16 @@ export default function DailyPracticePlannerPreview() {
     return () => {
       cancelled = true;
     };
-  }, [loaded, password, weekStartISO, dayCount]);
+  }, [loaded, weekStartISO, dayCount]);
 
   async function postPlanner(payload) {
     const response = await fetch(API_URL, {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json", "x-app-password": password },
+      headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(payload),
     });
 
     const data = await response.json();
-    if (response.status === 401) {
-      localStorage.removeItem(PASSWORD_KEY);
-      setPassword("");
-      setPasswordError("Password was rejected. Enter the correct app password.");
-      throw new Error(data.error || "Unauthorized.");
-    }
     if (!response.ok || !data.ok) {
       throw new Error(data.error || "Save failed.");
     }
@@ -459,56 +443,9 @@ export default function DailyPracticePlannerPreview() {
     setDayCount(10);
   }
 
-  function savePassword(event) {
-    event.preventDefault();
-    const next = passwordDraft.trim();
-    if (!next) {
-      setPasswordError("Enter the app password.");
-      return;
-    }
-    localStorage.setItem(PASSWORD_KEY, next);
-    setPassword(next);
-    setPasswordDraft("");
-    setPasswordError("");
-  }
-
-  function clearPassword() {
-    localStorage.removeItem(PASSWORD_KEY);
-    setPassword("");
-    setPasswordDraft("");
-    setPasswordError("");
-    setCloudStatus("local");
-  }
-
   const statusLabel = cloudStatus === "cloud" ? "Supabase" : cloudStatus === "loading" ? "Checking cloud" : "Local fallback";
   const statusIcon = cloudStatus === "cloud" ? <Cloud className="h-3.5 w-3.5" /> : <CloudOff className="h-3.5 w-3.5" />;
 
-
-  if (!password) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 text-slate-900">
-        <form onSubmit={savePassword} className="w-full max-w-sm border border-slate-400 bg-white p-5 shadow-2xl">
-          <div className="text-xl font-semibold">Daily Practice Planner</div>
-          <div className="mt-2 text-sm text-slate-600">Enter the app password to connect to Supabase.</div>
-          <input
-            type="password"
-            value={passwordDraft}
-            onChange={(e) => setPasswordDraft(e.target.value)}
-            autoFocus
-            className="mt-4 w-full border border-slate-400 px-3 py-2 outline-none focus:ring-2 focus:ring-slate-300"
-            placeholder="App password"
-          />
-          {passwordError && <div className="mt-2 text-sm text-red-700">{passwordError}</div>}
-          <button
-            type="submit"
-            className="mt-4 w-full border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-          >
-            Connect
-          </button>
-        </form>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -584,9 +521,6 @@ export default function DailyPracticePlannerPreview() {
             <button onClick={clearLocalData} className="inline-flex items-center gap-1 border border-transparent px-1.5 py-0.5 hover:border-slate-300 hover:bg-slate-100">
               <RotateCcw className="h-3.5 w-3.5" />
               Reset local
-            </button>
-            <button onClick={clearPassword} className="border border-transparent px-1.5 py-0.5 hover:border-slate-300 hover:bg-slate-100">
-              Change password
             </button>
           </div>
           {lastError && cloudStatus !== "cloud" && (
